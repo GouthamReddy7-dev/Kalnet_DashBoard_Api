@@ -19,33 +19,38 @@ def get_engine():
 
         DATABASE_URL = os.getenv("DATABASE_URL")
 
+        print("DATABASE_URL =", DATABASE_URL)
+
         if not DATABASE_URL:
             print("DATABASE_URL missing!")
             return None
 
-        # Fix for postgres:// issue
         if DATABASE_URL.startswith("postgres://"):
             DATABASE_URL = DATABASE_URL.replace(
                 "postgres://",
-                "postgresql://",
+                "postgresql+psycopg2://",
                 1
             )
 
+        print("FINAL DATABASE URL =", DATABASE_URL)
+
         engine = create_engine(
             DATABASE_URL,
-            pool_size=5,
-            max_overflow=10,
-            pool_recycle=1800,
             pool_pre_ping=True
         )
 
-        print("DATABASE CONNECTED")
+        # FORCE ACTUAL CONNECTION
+        connection = engine.connect()
+
+        print("DATABASE CONNECTION SUCCESS")
+
+        connection.close()
 
         return engine
 
     except Exception as e:
 
-        print("DATABASE ERROR:", e)
+        print("DATABASE ERROR =", repr(e))
 
         return None
 
