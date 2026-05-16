@@ -15,7 +15,7 @@ def get_engine():
 
     try:
 
-        DATABASE_URL = "postgresql://neondb_owner:npg_xMevXaF02cpK@ep-small-mud-aq8r7j3g-pooler.c-8.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+        DATABASE_URL = os.getenv("DB_Connection")
 
         engine = create_engine(
             DATABASE_URL
