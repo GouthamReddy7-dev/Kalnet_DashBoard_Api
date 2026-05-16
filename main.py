@@ -150,3 +150,13 @@ def get_lead(id: int):
         return {
             "error": str(e)
         }
+
+
+
+@app.get("/debug-env")
+def debug_env():
+    val = os.getenv("DB_Connection")
+    return {
+        "exists": val is not None,
+        "starts_with": val[:15] if val else "NOT FOUND"
+    }
