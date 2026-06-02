@@ -113,44 +113,31 @@ def get_leads(
 
 @app.get("/leads/{id}")
 def get_lead(id: int):
-
     try:
-
         engine = get_engine()
-
         if engine is None:
             return {"error": "Database connection failed"}
-
         query = "SELECT * FROM institutions WHERE id = :id"
-
         params = {
             "id": id
         }
-
         ans = pd.read_sql(
             text(query),
             engine,
             params=params
         )
-
         if ans.empty:
-
             return {
                 "message": "No Record Found"
             }
-
         return {
             "message": ans.to_dict(orient="records")
         }
-
     except Exception as e:
-
         print(e)
-
         return {
             "error": str(e)
         }
-
 
 
 @app.get("/debug-env")
