@@ -86,6 +86,8 @@ def get_leads(
             engine,
             params=params
         )
+        # Convert NaN values to None to prevent JSON serialization errors
+        ans = ans.where(pd.notnull(ans), None)
 
         return {
             "message": ans.to_dict(orient="records")
@@ -112,6 +114,8 @@ def get_lead(id: int):
             engine,
             params=params
         )
+        # Convert NaN values to None to prevent JSON serialization errors
+        ans = ans.where(pd.notnull(ans), None)
 
         if ans.empty:
             return {
@@ -175,11 +179,6 @@ async def upload_leads(request: Request):
             
             # Map common headers to DB columns (using normalized lowercase keys)
             column_mapping = {
-                # ID / Aishe Code mapping
-                'aishe code': 'id',
-                'aishecode': 'id',
-                'id': 'id',
-                
                 # Name mapping
                 'school_name': 'name',
                 'institution_name': 'name',
@@ -247,19 +246,15 @@ async def upload_leads(request: Request):
             
             df = df.rename(columns=rename_dict)
             
-            # Convert Aishe Code string to integer ID if present (e.g. C-44944 -> 44944)
-            if 'id' in df.columns:
-                def clean_id(val):
-                    if pd.isna(val) or val is None:
-                        return None
-                    # Strip characters and convert to integer
-                    digits = ''.join(c for c in str(val) if c.isdigit())
-                    return int(digits) if digits else None
-                df['id'] = df['id'].apply(clean_id)
+            # Convert student_count and icp_score safely to numeric (coercing non-numbers like "N/A" or " " to NaN)
+            if 'student_count' in df.columns:
+                df['student_count'] = pd.to_numeric(df['student_count'], errors='coerce')
+            if 'icp_score' in df.columns:
+                df['icp_score'] = pd.to_numeric(df['icp_score'], errors='coerce')
             
-            # Keep only the valid database columns that exist in the DataFrame
+            # Keep only the valid database columns (excluding id to allow auto-increment sequence)
             valid_cols = [
-                'id', 'name', 'state', 'district', 'type', 'board', 
+                'name', 'state', 'district', 'type', 'board', 
                 'student_count', 'company_size_category', 'website', 
                 'principal_name', 'email', 'phone', 'icp_score', 'icp_tier'
             ]
