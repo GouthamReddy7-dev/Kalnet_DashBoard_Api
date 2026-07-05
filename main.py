@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import pandas as pd
@@ -129,22 +129,38 @@ def get_lead(id: int):
         }
 
 @app.post("/leads")
-async def upload_leads(
-    file: Optional[UploadFile] = File(None),
-    leads_json: Optional[List[LeadItem]] = None
-):
+async def upload_leads(request: Request):
     """
-    Accepts CSV file upload or JSON payload and inserts records into the database.
+    Accepts CSV/Excel file upload (via multipart) or JSON payload and inserts records into the database.
     """
     engine = get_engine()
     if engine is None:
         raise HTTPException(status_code=500, detail="Database connection failed")
 
     records_to_insert = []
+    content_type = request.headers.get("content-type", "")
 
-    # Case 1: CSV or Excel File Upload
-    if file is not None:
+    # Case A: JSON Payload
+    if "application/json" in content_type:
         try:
+            leads_json = await request.json()
+            if isinstance(leads_json, list):
+                records_to_insert = leads_json
+            elif isinstance(leads_json, dict) and "leads_json" in leads_json:
+                records_to_insert = leads_json["leads_json"]
+            else:
+                raise HTTPException(status_code=400, detail="Invalid JSON structure. Expected list of records.")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to parse JSON: {str(e)}")
+
+    # Case B: CSV or Excel File Upload
+    else:
+        try:
+            form = await request.form()
+            file = form.get("file")
+            if file is None:
+                raise HTTPException(status_code=400, detail="No file uploaded in form parameter 'file'")
+                
             contents = await file.read()
             filename = file.filename.lower() if file.filename else ""
             
@@ -153,13 +169,17 @@ async def upload_leads(
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 "application/vnd.ms-excel"
             ]:
-                # Note: requires openpyxl package to read xlsx
                 df = pd.read_excel(io.BytesIO(contents))
             else:
                 df = pd.read_csv(io.BytesIO(contents))
             
             # Map common headers to DB columns (using normalized lowercase keys)
             column_mapping = {
+                # ID / Aishe Code mapping
+                'aishe code': 'id',
+                'aishecode': 'id',
+                'id': 'id',
+                
                 # Name mapping
                 'school_name': 'name',
                 'institution_name': 'name',
@@ -227,9 +247,19 @@ async def upload_leads(
             
             df = df.rename(columns=rename_dict)
             
+            # Convert Aishe Code string to integer ID if present (e.g. C-44944 -> 44944)
+            if 'id' in df.columns:
+                def clean_id(val):
+                    if pd.isna(val) or val is None:
+                        return None
+                    # Strip characters and convert to integer
+                    digits = ''.join(c for c in str(val) if c.isdigit())
+                    return int(digits) if digits else None
+                df['id'] = df['id'].apply(clean_id)
+            
             # Keep only the valid database columns that exist in the DataFrame
             valid_cols = [
-                'name', 'state', 'district', 'type', 'board', 
+                'id', 'name', 'state', 'district', 'type', 'board', 
                 'student_count', 'company_size_category', 'website', 
                 'principal_name', 'email', 'phone', 'icp_score', 'icp_tier'
             ]
@@ -242,15 +272,6 @@ async def upload_leads(
             
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Failed to parse file: {str(e)}")
-
-    # Case 2: JSON Payload
-    elif leads_json is not None:
-        records_to_insert = [
-            item.dict(exclude_none=True) for item in leads_json
-        ]
-    
-    else:
-        raise HTTPException(status_code=400, detail="Either a CSV file or a JSON payload must be provided")
 
     if not records_to_insert:
         return {"message": "No valid records to insert"}
