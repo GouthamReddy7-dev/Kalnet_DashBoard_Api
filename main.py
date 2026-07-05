@@ -10,32 +10,7 @@ import io
 
 load_dotenv()
 
-EXPECTED_COLUMNS = [
-    "name",
-    "state",
-    "district",
-    "type",
-    "board",
-    "student_count",
-    "company_size_category",
-    "website",
-    "principal_name",
-    "email",
-    "phone",
-    "icp_score",
-    "icp_tier"
-]
-
-REQUIRED_COLUMNS = ["name", "state", "district"]
-
 app = FastAPI(title="Kalnet AI Dashboard API")
-
-@app.get("/")
-def root():
-    return{
-        "status": "Backend Running",
-        "database": "Connected"
-    }
 
 def get_engine():
     try:
@@ -57,52 +32,11 @@ app.add_middleware(
 class LeadItem(BaseModel):
     id: Optional[int] = None
     name: Optional[str] = None
-    state: Optional[str] = None
     district: Optional[str] = None
+    state: Optional[str] = None
     type: Optional[str] = None
-    board: Optional[str] = None
-    student_count: Optional[int] = None
-    company_size_category: Optional[str] = None
-    website: Optional[str] = None
-    principal_name: Optional[str] = None
-    email: Optional[str] = None
-    phone: Optional[str] = None
-    icp_score: Optional[float] = None
     icp_tier: Optional[str] = None
-
-def validate_columns(df):
-    df.columns = (
-        df.columns
-        .str.strip()
-        .str.lower()
-        .str.replace(r"\s+", "_", regex=True)
-    )
-
-    uploaded_columns = set(df.columns)
-    expected_columns = set(EXPECTED_COLUMNS)
-
-    unexpected_columns = uploaded_columns - expected_columns
-
-    if unexpected_columns:
-        print(
-            f"Ignoring unexpected columns: "
-            f"{list(unexpected_columns)}"
-        )
-
-    missing_columns = expected_columns - uploaded_columns
-    missing_required = set(REQUIRED_COLUMNS) - uploaded_columns
-
-    if missing_required:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Missing required columns: {list(missing_required)}"
-        )
-
-    for col in (missing_columns - set(REQUIRED_COLUMNS)):
-        df[col] = None
-
-    return df[EXPECTED_COLUMNS]
-    
+    email: Optional[str] = None
 
 @app.get("/leads")
 def get_leads(
@@ -153,7 +87,6 @@ def get_leads(
             params=params
         )
 
-        
         return {
             "message": ans.to_dict(orient="records")
         }
@@ -209,35 +142,118 @@ async def upload_leads(
 
     records_to_insert = []
 
+    # Case 1: CSV or Excel File Upload
     if file is not None:
-        contents = await file.read()
+        try:
+            contents = await file.read()
+            filename = file.filename.lower() if file.filename else ""
+            
+            # Read CSV or Excel depending on extension/content-type
+            if filename.endswith(('.xlsx', '.xls')) or file.content_type in [
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "application/vnd.ms-excel"
+            ]:
+                # Note: requires openpyxl package to read xlsx
+                df = pd.read_excel(io.BytesIO(contents))
+            else:
+                df = pd.read_csv(io.BytesIO(contents))
+            
+            # Map common headers to DB columns (using normalized lowercase keys)
+            column_mapping = {
+                # Name mapping
+                'school_name': 'name',
+                'institution_name': 'name',
+                'aishe code name': 'name',
+                'name': 'name',
+                'search': 'name',
+                
+                # State mapping
+                'state': 'state',
+                
+                # District mapping
+                'district': 'district',
+                
+                # Type mapping
+                'college type': 'type',
+                'school_type': 'type',
+                'schooltype': 'type',
+                'type': 'type',
+                
+                # Board / affiliation mapping
+                'manegement': 'board',
+                'management': 'board',
+                'university name': 'board',
+                'board': 'board',
+                
+                # Website mapping
+                'website': 'website',
+                
+                # Student count mapping
+                'student_count': 'student_count',
+                'student count': 'student_count',
+                
+                # Company size mapping
+                'company_size_category': 'company_size_category',
+                'company size': 'company_size_category',
+                
+                # Principal name mapping
+                'principal_name': 'principal_name',
+                'principal name': 'principal_name',
+                
+                # Email mapping
+                'email': 'email',
+                
+                # Phone mapping
+                'phone': 'phone',
+                'phone number': 'phone',
+                
+                # ICP Score mapping
+                'icp_score': 'icp_score',
+                
+                # ICP Tier mapping
+                'icp_tier': 'icp_tier',
+                'tier': 'icp_tier'
+            }
+            
+            # Normalize df columns to strip whitespace
+            df.columns = [str(col).strip() for col in df.columns]
+            
+            # Map columns case-insensitively, avoiding duplicate destination columns
+            lowercase_cols = {col.lower(): col for col in df.columns}
+            rename_dict = {}
+            for key_variant, db_col in column_mapping.items():
+                if key_variant in lowercase_cols and db_col not in rename_dict.values():
+                    rename_dict[lowercase_cols[key_variant]] = db_col
+            
+            df = df.rename(columns=rename_dict)
+            
+            # Keep only the valid database columns that exist in the DataFrame
+            valid_cols = [
+                'name', 'state', 'district', 'type', 'board', 
+                'student_count', 'company_size_category', 'website', 
+                'principal_name', 'email', 'phone', 'icp_score', 'icp_tier'
+            ]
+            cols_to_keep = [col for col in valid_cols if col in df.columns]
+            df_filtered = df[cols_to_keep]
+            
+            # Convert NaN to None for SQL database insertion
+            df_filtered = df_filtered.where(pd.notnull(df_filtered), None)
+            records_to_insert = df_filtered.to_dict(orient="records")
+            
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to parse file: {str(e)}")
 
-        df = pd.read_csv(io.BytesIO(contents))
-
-        df = validate_columns(df)
-
-        df = df.dropna(how="all")
-
-        df = df.where(pd.notnull(df), None)
-
-        records_to_insert = df.to_dict(orient="records")
-
+    # Case 2: JSON Payload
     elif leads_json is not None:
-
-        df = pd.DataFrame([
-            item.dict(exclude_none=True)
-            for item in leads_json
-        ])
-
-        df = validate_columns(df)
-
-        records_to_insert = df.to_dict(orient="records")
-
+        records_to_insert = [
+            item.dict(exclude_none=True) for item in leads_json
+        ]
+    
     else:
-        raise HTTPException(
-            status_code=400,
-            detail="Either a CSV file or a JSON payload must be provided"
-        )
+        raise HTTPException(status_code=400, detail="Either a CSV file or a JSON payload must be provided")
+
+    if not records_to_insert:
+        return {"message": "No valid records to insert"}
 
     # Insert records into database
     try:
@@ -245,14 +261,21 @@ async def upload_leads(
         # Let's insert using SQL connection to avoid table replacement issues
         inserted_count = 0
         with engine.begin() as conn:
-            df.to_sql(
-                "institutions",
-                con=conn,
-                if_exists="append",
-                index=False
-            )
-
-            inserted_count = len(df)
+            for record in records_to_insert:
+                # Build columns and values dynamically
+                cols = list(record.keys())
+                if not cols:
+                    continue
+                # Exclude id if it's auto-incrementing and not passed, or passed as None
+                if 'id' in cols and record['id'] is None:
+                    cols.remove('id')
+                    
+                columns_str = ", ".join(cols)
+                placeholders_str = ", ".join([f":{col}" for col in cols])
+                
+                query_str = f"INSERT INTO institutions ({columns_str}) VALUES ({placeholders_str})"
+                conn.execute(text(query_str), record)
+                inserted_count += 1
                 
         return {
             "success": True,
